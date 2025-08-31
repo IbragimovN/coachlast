@@ -58,6 +58,7 @@ def get_user(chat_id):
             "name": None,
             "last_plan_date": None,
             "today_plan": None,
+            "tomorrow_busy": None,
             "streak": 0
         }
         db[str(chat_id)] = u
@@ -235,22 +236,37 @@ async def habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Твои привычки:\n{s}")
 
 async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = get_user(chat_id)
+    today = datetime.now(TZ).date().isoformat()
+
+    # Если план уже есть на сегодня — просто показываем его
     if user.get("last_plan_date") == today and user.get("today_plan"):
-        prios = user["today_plan"]
-    else:
-        prios = pick_daily_priorities(user["goals"], user["habits"], k=3)
-        user["last_plan_date"] = today
-        user["today_plan"] = prios
-        save_db(db)
+        reply = user["today_plan"][0] if isinstance(user["today_plan"], list) else user["today_plan"]
+        await update.message.reply_text(reply)
+        return
+
+    # Если плана нет — генерируем новый
+    prios = pick_daily_priorities(user["goals"], user["habits"], k=3)
+    busy = user.get("tomorrow_busy") or "нет фиксированных дел"
+
     prompt = (
-        f"Пользователь: {user.get('name') or 'друг'}.\n"
-        f"Цели: {humanize_list(user['goals']) or 'пока пусто'}.\n"
-        f"Привычки: {humanize_list(user['habits']) or 'пока нет'}.\n"
-        f"Сформируй короткий план на сегодня из этих пунктов: {humanize_list(prios)}.\n"
-        "Добавь короткую мотивацию в конце."
+        f"Ты коуч и тайм-менеджер.\n"
+        f"Планы пользователя на день: {busy}.\n"
+        f"Нужно распределить задачи по свободным слотам:\n"
+        f"{humanize_list(prios)}.\n"
+        "Формат: время — задача. В конце добавь короткую мотивацию."
     )
-    reply = await ai_say(COACH_SYSTEM_PROMPT, prompt)
-    await update.message.reply_text(f"План на сегодня:\n- " + "\n- ".join(prios) + f"\n\n{reply}")
+
+    reply = await ai_say("Коуч-планировщик", prompt)
+
+    # сохраняем план
+    user["last_plan_date"] = today
+    user["today_plan"] = [reply]
+    user["tomorrow_busy"] = None   # очищаем после использования
+    save_db(db)
+
+    await update.message.reply_text(reply)
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -288,14 +304,41 @@ async def send_message(app, chat_id, text):
 
 async def morning_ping(app, chat_id):
     user = get_user(chat_id)
-    pr = random.choice(MORNING_PROMPTS)
-    msg = f"Доброе утро, {user.get('name') or 'друг'}! 🌞 {pr}\nНапиши /plan чтобы получить план дня."
+    today = datetime.now(TZ).date().isoformat()
+
+    # Если плана нет — создаём
+    if user.get("last_plan_date") != today or not user.get("today_plan"):
+        prios = pick_daily_priorities(user["goals"], user["habits"], k=3)
+        busy = user.get("tomorrow_busy") or "нет фиксированных дел"
+        
+        prompt = (
+            f"Ты коуч и тайм-менеджер.\n"
+            f"Планы пользователя на день: {busy}.\n"
+            f"Нужно распределить задачи по свободным слотам:\n"
+            f"{humanize_list(prios)}.\n"
+            "Формат: время — задача. В конце добавь короткую мотивацию."
+        )
+        plan_text = await ai_say("Коуч-планировщик", prompt)
+
+        user["last_plan_date"] = today
+        user["today_plan"] = [plan_text]
+        user["tomorrow_busy"] = None   # очищаем, чтобы каждый вечер уточнять заново
+        save_db(db)
+
+    msg = (
+        f"Доброе утро, {user.get('name') or 'друг'}! 🌞 "
+        "Я составил для тебя план на сегодня. Напиши /plan, чтобы посмотреть."
+    )
     await send_message(app, chat_id, msg)
 
 async def evening_ping(app, chat_id):
     user = get_user(chat_id)
     pr = random.choice(EVENING_PROMPTS)
-    msg = f"Вечерняя отметка, {user.get('name') or 'друг'} 🌙 {pr}\nОтправь /report и кратко опиши, что сделал."
+    (
+        f"Вечерняя отметка, {user.get('name') or 'друг'} 🌙 {pr}\n"
+        "А теперь укажи завтрашние дела в формате:\n"
+        "/tomorrow 09:00–18:00 работа, 20:00–21:00 встреча"
+    )
     await send_message(app, chat_id, msg)
 
 async def random_midday_ping(app, chat_id):
@@ -303,6 +346,24 @@ async def random_midday_ping(app, chat_id):
     pr = random.choice(MIDDAY_PROMPTS)
     msg = f"{user.get('name') or 'Эй'}! {pr}"
     await send_message(app, chat_id, msg)
+
+async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = get_user(chat_id)
+    text = " ".join(context.args).strip()
+    if not text:
+        await update.message.reply_text(
+            "Укажи свои обязательные планы на завтра в формате:\n"
+            "/tomorrow 09:00–18:00 работа, 20:00–21:00 встреча"
+        )
+        return
+
+    user["tomorrow_busy"] = text
+    save_db(db)
+    await update.message.reply_text(
+        f"Принято! 📅 Завтра у тебя занято: {text}.\n"
+        "Я сам распределю твои цели и привычки в свободное время."
+    )
 
 def schedule_for_chat(app, chat_id):
     """Регистрируем/обновляем задачи для конкретного чата."""
@@ -379,4 +440,5 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
 
         pass
+
 
