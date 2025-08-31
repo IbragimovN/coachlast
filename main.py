@@ -57,6 +57,7 @@ def get_user(chat_id):
             "habits": [],
             "name": None,
             "last_plan_date": None,
+            "today_plan": None,
             "streak": 0
         }
         db[str(chat_id)] = u
@@ -234,12 +235,13 @@ async def habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Твои привычки:\n{s}")
 
 async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user = get_user(chat_id)
-    today = datetime.now(TZ).date().isoformat()
-    prios = pick_daily_priorities(user["goals"], user["habits"], k=3)
-    user["last_plan_date"] = today
-    save_db(db)
+    if user.get("last_plan_date") == today and user.get("today_plan"):
+        prios = user["today_plan"]
+    else:
+        prios = pick_daily_priorities(user["goals"], user["habits"], k=3)
+        user["last_plan_date"] = today
+        user["today_plan"] = prios
+        save_db(db)
     prompt = (
         f"Пользователь: {user.get('name') or 'друг'}.\n"
         f"Цели: {humanize_list(user['goals']) or 'пока пусто'}.\n"
@@ -377,3 +379,4 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
 
         pass
+
