@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from telegram._update import Update
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 # ==== Config ====
@@ -137,7 +137,6 @@ COACH_SYSTEM_PROMPT = """Ты – CoachAI, личный коуч Нурбека.
 - Не бойся его обидеть, он этого хочет ради результата.
 """
 
-
 MORNING_PROMPTS = [
     "Пора начинать день. Выберем 3 приоритета и разложим их на маленькие шаги.",
     "Доброе утро! Что сделаем сегодня, чтобы стать на шаг ближе к целям?",
@@ -173,6 +172,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/habit <текст> — добавить привычку\n"
         "/habits — список привычек\n"
         "/plan — план на сегодня\n"
+        "/tomorrow — указать занятое время на завтра\n"
         "/report — отчёт за день\n"
         "/help — помощь\n\n"
         "Начни с добавления 1–2 целей. Пример: /goal Подтянуть английский до B2"
@@ -187,6 +187,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/habit <текст> — добавить привычку\n"
         "/habits — список привычек\n"
         "/plan — план на сегодня\n"
+        "/tomorrow — указать занятое время на завтра\n"
         "/report — отчёт за день\n"
         "Совет: держи цели короткими и измеримыми."
     )
@@ -242,7 +243,7 @@ async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Если план уже есть на сегодня — просто показываем его
     if user.get("last_plan_date") == today and user.get("today_plan"):
-        reply = user["today_plan"][0] if isinstance(user["today_plan"], list) else user["today_plan"]
+        reply = user["today_plan"]
         await update.message.reply_text(reply)
         return
 
@@ -260,9 +261,9 @@ async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply = await ai_say("Коуч-планировщик", prompt)
 
-    # сохраняем план
+    # сохраняем план (строкой)
     user["last_plan_date"] = today
-    user["today_plan"] = [reply]
+    user["today_plan"] = reply
     user["tomorrow_busy"] = None   # очищаем после использования
     save_db(db)
 
@@ -321,7 +322,7 @@ async def morning_ping(app, chat_id):
         plan_text = await ai_say("Коуч-планировщик", prompt)
 
         user["last_plan_date"] = today
-        user["today_plan"] = [plan_text]
+        user["today_plan"] = plan_text
         user["tomorrow_busy"] = None   # очищаем, чтобы каждый вечер уточнять заново
         save_db(db)
 
@@ -334,7 +335,7 @@ async def morning_ping(app, chat_id):
 async def evening_ping(app, chat_id):
     user = get_user(chat_id)
     pr = random.choice(EVENING_PROMPTS)
-    (
+    msg = (
         f"Вечерняя отметка, {user.get('name') or 'друг'} 🌙 {pr}\n"
         "А теперь укажи завтрашние дела в формате:\n"
         "/tomorrow 09:00–18:00 работа, 20:00–21:00 встреча"
@@ -419,6 +420,7 @@ async def main():
     application.add_handler(CommandHandler("habits", habits))
     application.add_handler(CommandHandler("plan", plan))
     application.add_handler(CommandHandler("report", report))
+    application.add_handler(CommandHandler("tomorrow", tomorrow))  # <-- added
 
     # Fallback for any text
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback))
@@ -427,7 +429,10 @@ async def main():
     application.scheduler = AsyncIOScheduler(timezone=TZ)
     application.scheduler.start()
     for key in list(db.keys()):
-        schedule_for_chat(application, int(key))
+        try:
+            schedule_for_chat(application, int(key))
+        except Exception as e:
+            print("schedule_for_chat error for", key, e)
 
     print(f"{BOT_NAME} is running with TZ Asia/Tashkent.")
     await application.run_polling()
@@ -438,7 +443,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-
         pass
-
-
