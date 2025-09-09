@@ -299,13 +299,15 @@ async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==== Proactive messaging (scheduler) ====
 async def send_message(app, chat_id, text):
     try:
-        await app.bot.send_message(chat_id=chat_id, text=text)
+        # Если текст длинный — режем на куски по 4000 символов
+        MAX_LEN = 4000
+        if len(text) > MAX_LEN:
+            for i in range(0, len(text), MAX_LEN):
+                await app.bot.send_message(chat_id=chat_id, text=text[i:i+MAX_LEN])
+        else:
+            await app.bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
         print("send_message error:", e)
-
-async def morning_ping(app, chat_id):
-    user = get_user(chat_id)
-    today = datetime.now(TZ).date().isoformat()
 
     # Если плана нет — создаём
     if user.get("last_plan_date") != today or not user.get("today_plan"):
@@ -444,3 +446,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         pass
+
